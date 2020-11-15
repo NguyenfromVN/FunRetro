@@ -1,0 +1,23 @@
+*{
+  font-family:sans-serif;
+}
+body{
+  margin:0px;
+}
+.title{
+  display: flex;
+  align-items: center;
+  font-weight: bold;
+}
+.textarea{
+  width: 100%;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.displayNone{
+  display: none;
+}
+a {
+  text-decoration: none;
+  color: inherit;
+}
