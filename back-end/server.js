@@ -6,6 +6,8 @@ const hmacsha256=require('crypto-js/hmac-sha256');
 const CryptoJS = require("crypto-js");
 const {Base64} = require('js-base64');
 const base32 = require('base32');
+const ws=require('ws');
+const wss=new ws.Server({noServer:true});
 
 app.use(bodyParser.json());
 app.use(cors());
@@ -515,5 +517,72 @@ function import_helpers(){
     }
 }
 
+// WEB SOCKET
+let activeUsers=(()=>{
+    // private hash map to store subscribers for each board id
+    let activeUsers={};
+    
+    // private setters
+    function add(boardId, socket){
+        if (!activeUsers[boardId])
+            activeUsers[boardId]=[];
+        activeUsers[boardId].push(socket);
+    }
+
+    function remove(boardId, socket){
+        let newSubscribersForThisBoard=[];
+        if (activeUsers[boardId].length==1){
+            delete activeUsers[boardId];
+            return;
+        }
+        activeUsers[boardId].forEach(x=>{
+            if (x!=socket)
+                newSubscribersForThisBoard.push(x);
+        })
+        activeUsers[boardId]=newSubscribersForThisBoard;
+    }
+
+    return {
+        addNewSubscriber:function(boardId, socket){
+            add(boardId, socket);
+        },
+        removeSubscriber: function(boardId, socket){
+            remove(boardId, socket);
+        },
+        broadcastToSubscribers: function(boardId){
+            let subscribers=activeUsers[boardId] || [];
+            subscribers.forEach(x=>{
+                // notify changes to subscribers
+                console.log('---send notification to users for changes');
+                x.send('There are some changes that need to be updated');
+            });
+        }
+    }    
+})();
+
+wss.on('connection',(socket,req)=>{
+    console.log('a client want to make a connection');
+
+    const boardId=req.url.split('=')[1]; // boardId for each user
+
+    activeUsers.addNewSubscriber(boardId, socket);
+
+    socket.on('message',msg=>{
+        // broadcast the changes to subscribers  
+        console.log(msg);
+        activeUsers.broadcastToSubscribers(boardId);
+    });
+
+    socket.on('close',()=>{
+        activeUsers.removeSubscriber(boardId, socket);
+    })
+});
+
 const port = 3007;
-app.listen(port, () => console.log(`App is listening on port ${port}`));
+const server=app.listen(port, () => console.log(`App is listening on port ${port}`));
+
+server.on('upgrade',(req,socket,head)=>{
+    wss.handleUpgrade(req,socket,head,socket=>{
+        wss.emit('connection',socket,req);
+    });
+});

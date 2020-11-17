@@ -31,6 +31,39 @@ import {
 } from "react-router-dom";
 import './index.css';
 
+// global WebSocket instance
+const ws = (function () {
+  let ws = undefined;
+  let lazyLoad=0; // number of times when the update is not needed, avoid updating when you are the author of this change
+  return {
+    createConnection: function(loadBoard){
+      const boardId=(new URL(document.location)).searchParams.get('id');
+      this.destroyConnection();
+      ws = new WebSocket("ws://localhost:3007?boardId=" + boardId);
+      console.log('new connection');
+      ws.addEventListener("message", ({data}) => {
+        // reload the board
+        console.log('from server = '+data);
+        if (lazyLoad>0)
+          lazyLoad-=1;
+        else
+          loadBoard(boardId);
+      });
+    },
+    destroyConnection: () => {
+      console.log('destroy WS');
+      if (ws)
+        ws.close();
+      ws = undefined;
+    },
+    notifyForChange: () => {
+      console.log('ping server for change');
+      ws.send("A change has been made");
+      lazyLoad+=1;
+    }
+  }
+})();
+
 // CSS for material-ui
 
 const useStyles = makeStyles((theme) => ({
@@ -253,7 +286,20 @@ function BoardTitle(props) {
   const classes = useStyles();
   let query = useQuery();
 
-  useEffect(() => { props.createdHook(query.get('id')); props.setIsLoggedIn(true); }, []);
+  useEffect(() => {
+    (async () => {
+      let isLogged = await props.createdHook(query.get('id'));
+      if (isLogged) {
+        props.setIsLoggedIn(true);
+        props.createConnection();
+      }
+    })();
+    // hook for onDestroy of lifecycle
+    return ()=>{
+      console.log('Component destroyed');
+      ws.destroyConnection();
+    }
+  }, []);
 
   return (
     <Box className={classes.boardTitle}>
@@ -361,7 +407,7 @@ function BoardsList(props) {
     />
   ));
 
-  useEffect(() => { props.createdHook(); props.setIsLoggedIn(true) }, []);
+  useEffect(() => { props.createdHook(); props.setIsLoggedIn(true); }, []);
 
   return (
     <Grid container spacing={2}>
@@ -645,29 +691,22 @@ function Profile(props) {
 
   const classes = useStyles();
 
-  useEffect(() => {
-    (async()=>{
-      let data=await props.loadUserInfo();
-      setUsername(data.username);
-      setEmail(data.email);
-      setUserInfo(data);
-    })();
-  },[]);
+  useEffect(() => props.loadUserProfile({ setUserInfo, setUsername, setEmail }), []);
 
   async function submitNewUsername(e) {
     if (e.charCode === 13) { // enter is pressed
-      let data={username};
+      let data = { username };
       await props.updateUserInfoHandler(data);
-      setUserInfo({username,email:userInfo.email});
+      setUserInfo({ username, email: userInfo.email });
       setOnEditUsername(false);
     }
   }
 
   async function submitNewEmail(e) {
     if (e.charCode === 13) { // enter is pressed
-      let data={email};
+      let data = { email };
       await props.updateUserInfoHandler(data);
-      setUserInfo({username:userInfo.username,email});
+      setUserInfo({ username: userInfo.username, email });
       setOnEditEmail(false);
     }
   }
@@ -703,7 +742,7 @@ function Profile(props) {
                   <CreateIcon onClick={() => { setOnEditUsername(true) }} />
                 </Box>
                 <Box className={!onEditUsername ? "displayNone" : null}>
-                  <CloseIcon onClick={() => { setOnEditUsername(false);setUsername(userInfo.username); }} />
+                  <CloseIcon onClick={() => { setOnEditUsername(false); setUsername(userInfo.username); }} />
                 </Box>
               </Box>
             </Box>
@@ -731,13 +770,13 @@ function Profile(props) {
                   <CreateIcon onClick={() => { setOnEditEmail(true) }} />
                 </Box>
                 <Box className={!onEditEmail ? "displayNone" : null}>
-                  <CloseIcon onClick={() => { setOnEditEmail(false);setEmail(userInfo.email); }} />
+                  <CloseIcon onClick={() => { setOnEditEmail(false); setEmail(userInfo.email); }} />
                 </Box>
               </Box>
             </Box>
           </Grid>
           <Grid container>
-            <Grid item style={{paddingLeft: "8px"}}>
+            <Grid item style={{ paddingLeft: "8px" }}>
               <i>*while editing, press Enter to submit your change</i>
             </Grid>
           </Grid>
@@ -799,6 +838,7 @@ function Retro() {
     let token = getToken();
     let response = await fetch('http://localhost:3007/board/tag/delete?id=' + id + '&dbTableName=' + dbTableName + '&token=' + token);
     response = await response.json();
+    ws.notifyForChange();
     return response;
   }
 
@@ -806,6 +846,7 @@ function Retro() {
     let token = getToken();
     let response = await fetch('http://localhost:3007/board/tag/add?dbTableName=' + dbTableName + '&boardId=' + boardId + '&content=' + content + '&token=' + token);
     response = await response.json();
+    ws.notifyForChange();
     return response;
   }
 
@@ -813,6 +854,7 @@ function Retro() {
     let token = getToken();
     let response = await fetch('http://localhost:3007/board/tag/update?dbTableName=' + dbTableName + '&id=' + id + '&boardId=' + boardId + '&content=' + content + '&token=' + token);
     response = await response.json();
+    ws.notifyForChange();
     return response;
   }
 
@@ -820,6 +862,7 @@ function Retro() {
     let token = getToken();
     let response = await fetch('http://localhost:3007/board/name/update?boardId=' + boardId + '&name=' + boardName + '&token=' + token);
     response = await response.json();
+    ws.notifyForChange();
     return response;
   }
 
@@ -879,11 +922,11 @@ function Retro() {
 
   async function updateUserInfo(data) {
     let token = getToken();
-    let response=await fetch('http://localhost:3007/user/update?'+
-      (data.username ? 'username='+data.username+'&' : '')+
-      (data.email ? 'email='+data.email+'&' : '')+
-      'token='+token);
-    response=await response.json();
+    let response = await fetch('http://localhost:3007/user/update?' +
+      (data.username ? 'username=' + data.username + '&' : '') +
+      (data.email ? 'email=' + data.email + '&' : '') +
+      'token=' + token);
+    response = await response.json();
     return response;
   }
 
@@ -894,7 +937,7 @@ function Retro() {
     let response = await getBoard(id);
     if (invalidToken(response)) {
       document.getElementById('hiddenLinkToGetToLoginPage').click();
-      return;
+      return false;
     }
     let action_items, to_improve, went_well, board;
     ({ action_items, to_improve, went_well, board } = response);
@@ -902,6 +945,7 @@ function Retro() {
     setToImprove(to_improve);
     setWentWell(went_well);
     setBoard(board);
+    return true;
   }
 
   async function loadBoards() {
@@ -1072,13 +1116,25 @@ function Retro() {
     document.getElementById('hiddenLinkToGetToLoginPage').click();
   }
 
-  async function updateUserInfoHandler(data){
-    let response=await updateUserInfo(data);
-    if (response.isDuplicate){
+  async function updateUserInfoHandler(data) {
+    let response = await updateUserInfo(data);
+    if (response.isDuplicate) {
       alert("Username or Email is not unique!");
       return;
     }
     setToken(response.token);
+  }
+
+  async function loadUserProfile(setters) {
+    let response = await loadUserInfo();
+    if (invalidToken(response)) {
+      document.getElementById('hiddenLinkToGetToLoginPage').click();
+      return;
+    }
+    let data = response;
+    setters.setUsername(data.username);
+    setters.setEmail(data.email);
+    setters.setUserInfo(data);
   }
 
   return (
@@ -1096,6 +1152,7 @@ function Retro() {
               name={board.board_name}
               doneButtonBoardTitleHandler={doneButtonBoardTitleHandler}
               // attach the function 'loadBoard' here, to let it run and fetch board's data
+              createConnection={() => ws.createConnection(loadBoard)}
               createdHook={loadBoard}
               setIsLoggedIn={setIsLoggedIn}
             />
@@ -1178,6 +1235,7 @@ function Retro() {
           <Profile
             loadUserInfo={loadUserInfo}
             updateUserInfoHandler={updateUserInfoHandler}
+            loadUserProfile={loadUserProfile}
           />
         </Route>
       </Switch>
